@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	appTitle = "PDF 合并工具 v3.1.3"
+	appTitle = "PDF 合并工具 v3.1.4"
 
 	WS_OVERLAPPED       = 0x00000000
 	WS_CAPTION          = 0x00C00000
@@ -376,10 +376,11 @@ var (
 	pSelectObject            = gdi32.NewProc("SelectObject")
 	pRoundRect               = gdi32.NewProc("RoundRect")
 
-	pGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
-	pCreateMutexW     = kernel32.NewProc("CreateMutexW")
-	pGetLastError     = kernel32.NewProc("GetLastError")
-	pCloseHandle      = kernel32.NewProc("CloseHandle")
+	pGetModuleHandleW   = kernel32.NewProc("GetModuleHandleW")
+	pCreateMutexW       = kernel32.NewProc("CreateMutexW")
+	pGetLastError       = kernel32.NewProc("GetLastError")
+	pCloseHandle        = kernel32.NewProc("CloseHandle")
+	pMultiByteToWideChar = kernel32.NewProc("MultiByteToWideChar")
 
 	pCreateFontW         = gdi32.NewProc("CreateFontW")
 	pCreateFontIndirectW = gdi32.NewProc("CreateFontIndirectW")
@@ -500,7 +501,6 @@ func createControl(exStyle uint32, class, text string, style uint32, id int32) u
 func setFont(hwnd, font uintptr) { send(hwnd, WM_SETFONT, font, 1) }
 
 func createFonts() {
-	// Use the Windows UI font and the user's system text-size setting.
 	var lf LOGFONT
 	ok, _, _ := pSystemParametersInfoW.Call(SPI_GETICONTITLELOGFONT, uintptr(unsafe.Sizeof(lf)), uintptr(unsafe.Pointer(&lf)), 0)
 	if ok == 0 {
@@ -693,7 +693,6 @@ func commonAutoName(paths []string) string {
 		}
 	}
 	s := string(prefix)
-	// If common prefix ends inside a varying numeric token, drop that whole trailing numeric token.
 	if regexp.MustCompile(`\d$`).MatchString(s) {
 		s = regexp.MustCompile(`\d+$`).ReplaceAllString(s, "")
 	}
@@ -880,7 +879,6 @@ func moveSelected(delta int) {
 	app.manualOrder = true
 	app.mu.Unlock()
 	refreshList()
-	// derive new indices by shifting bounds reasonably
 	ns := make([]int, 0, len(sel))
 	for _, i := range sel {
 		j := i + delta
@@ -1154,9 +1152,6 @@ func splitMultiSelect(buf []uint16) []string {
 }
 
 func chooseFile(title, filterStr, defExt string, save bool) string {
-	// IMPORTANT: keep all UTF-16 backing slices alive until the common dialog
-	// returns. Storing a pointer from a temporary wstr() in OPENFILENAME can
-	// leave the dialog with a dangling pointer after a GC cycle.
 	buf := make([]uint16, 4096)
 	filterW := utf16Multi(filterStr)
 	titleW := syscall.StringToUTF16(title)
@@ -1183,7 +1178,6 @@ func chooseFile(title, filterStr, defExt string, save bool) string {
 	} else {
 		r, _, _ = pGetOpenFileNameW.Call(uintptr(unsafe.Pointer(&ofn)))
 	}
-	// Explicitly root memory referenced by OPENFILENAME across the DLL call.
 	runtime.KeepAlive(filterW)
 	runtime.KeepAlive(titleW)
 	runtime.KeepAlive(defExtW)
@@ -1243,6 +1237,25 @@ func exportCSV() {
 	setText(app.statusLabel, "已导出顺序 CSV："+p)
 }
 
+func decodeCSVBytes(b []byte) ([]byte, error) {
+	b = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF})
+	if len(b) == 0 || bytes.Contains(b, []byte("文件名")) || bytes.Contains(b, []byte("完整路径")) {
+		return b, nil
+	}
+
+	const cpGBK = 936
+	n, _, _ := pMultiByteToWideChar.Call(cpGBK, 0, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)), 0, 0)
+	if n == 0 {
+		return nil, fmt.Errorf("CSV 既不是有效 UTF-8，也无法按 GBK/ANSI 解码")
+	}
+	wide := make([]uint16, int(n))
+	n2, _, _ := pMultiByteToWideChar.Call(cpGBK, 0, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)), uintptr(unsafe.Pointer(&wide[0])), n)
+	if n2 == 0 {
+		return nil, fmt.Errorf("GBK/ANSI CSV 解码失败")
+	}
+	return []byte(string(utf16.Decode(wide[:int(n2)]))), nil
+}
+
 func importCSV() {
 	p := chooseFile("导入顺序 CSV", "CSV 文件 (*.csv)\x00*.csv\x00所有文件 (*.*)\x00*.*", "csv", false)
 	if p == "" {
@@ -1253,7 +1266,11 @@ func importCSV() {
 		msgbox("导入失败", e.Error(), MB_OK|MB_ICONERROR)
 		return
 	}
-	b = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF})
+	b, e = decodeCSVBytes(b)
+	if e != nil {
+		msgbox("CSV 编码不支持", e.Error(), MB_OK|MB_ICONWARNING)
+		return
+	}
 	r := csv.NewReader(bytes.NewReader(b))
 	rows, e := r.ReadAll()
 	if e != nil || len(rows) < 2 {
@@ -1263,7 +1280,7 @@ func importCSV() {
 	header := rows[0]
 	idxName, idxPath := -1, -1
 	for i, h := range header {
-		switch strings.TrimSpace(h) {
+		switch strings.TrimSpace(strings.TrimPrefix(h, "\uFEFF")) {
 		case "文件名":
 			idxName = i
 		case "完整路径":
@@ -1503,28 +1520,19 @@ func layout() {
 	pGetClientRect.Call(app.hwnd, uintptr(unsafe.Pointer(&rc)))
 	w := rc.Right - rc.Left
 	h := rc.Bottom - rc.Top
-
-	// Responsive geometry. The old layout pinned the list to a minimum height
-	// and then placed the output card below it, which pushed controls outside
-	// the client area when the window was resized smaller.
 	margin := int32(24)
 	gap := int32(16)
 	rightW := int32(142)
 	headerTop := int32(20)
 	headerH := int32(72)
 	bottomH := int32(176)
-
-	// Keep a sane geometry even during intermediate WM_SIZE events.
 	if w < 760 || h < 560 {
 		return
 	}
-
-	// Header
 	move(app.titleLabel, margin, headerTop, w-2*margin-250, 38)
 	move(app.countLabel, w-margin-240, headerTop+4, 190, 30)
 	move(app.toolsBtn, w-margin-40, headerTop+2, 40, 34)
 	move(app.subLabel, margin, headerTop+42, w-2*margin, 24)
-
 	contentTop := headerTop + headerH
 	cardTop := h - margin - bottomH
 	minListH := int32(250)
@@ -1538,9 +1546,6 @@ func layout() {
 		listW = 480
 	}
 	move(app.list, margin, contentTop, listW, listH)
-
-	// Right action rail. All buttons remain inside the list region; if the
-	// region gets short, use a compact vertical gap instead of overflowing.
 	bx := margin + listW + gap
 	by := contentTop
 	bh := int32(34)
@@ -1557,23 +1562,17 @@ func layout() {
 		move(b, bx, by, rightW, bh)
 		by += bh + bg
 	}
-
-	// Output section. Do not place a painted STATIC behind sibling controls:
-	// on some Windows/DPI combinations it can repaint over them after WM_SIZE.
-	// Keeping the section on the main window background makes resize deterministic.
 	cardX := margin
 	cardW := w - 2*margin
 	innerX := cardX + 12
 	innerW := cardW - 24
 	move(app.outputTitle, innerX, cardTop+4, 160, 24)
-
 	labelW := int32(78)
 	browseW := int32(82)
 	row1 := cardTop + 34
 	move(app.saveLabel, innerX, row1+5, labelW, 24)
 	move(app.saveEdit, innerX+labelW, row1, innerW-labelW-browseW-gap, 32)
 	move(app.browseBtn, cardX+cardW-12-browseW, row1, browseW, 32)
-
 	row2 := row1 + 40
 	checkW := int32(180)
 	move(app.nameLabel, innerX, row2+5, labelW, 24)
@@ -1586,12 +1585,10 @@ func layout() {
 	}
 	move(app.nameEdit, innerX+labelW, row2, nameW, 32)
 	move(app.locateCheck, cardX+cardW-12-checkW, row2+4, checkW, 26)
-
 	mergeW := int32(148)
 	row3 := row2 + 39
 	move(app.finalLabel, innerX, row3+2, innerW-mergeW-gap, 24)
 	move(app.mergeBtn, cardX+cardW-12-mergeW, row3-5, mergeW, 42)
-
 	row4 := row3 + 30
 	leftW := innerW - mergeW - gap
 	move(app.progress, innerX, row4, leftW, 6)
@@ -1608,7 +1605,6 @@ func createUI() {
 	app.toolsBtn = createControl(0, "BUTTON", "···", BS_OWNERDRAW|WS_TABSTOP, ID_TOOLS)
 	app.subLabel = createControl(0, "STATIC", "拖入 PDF 或文件夹，调整顺序后按 Enter 即可合并", 0, 0)
 	setFont(app.subLabel, app.font)
-
 	app.list = createControl(WS_EX_CLIENTEDGE, "SysListView32", "", LVS_REPORT|LVS_SHOWSELALWAYS|WS_TABSTOP|WS_VSCROLL|WS_HSCROLL, ID_LIST)
 	initListColumns()
 	labels := []struct {
@@ -1619,7 +1615,6 @@ func createUI() {
 		h := createControl(0, "BUTTON", x.text, BS_OWNERDRAW|WS_TABSTOP, x.id)
 		app.buttons = append(app.buttons, h)
 	}
-
 	app.outputCard = 0
 	app.outputTitle = createControl(0, "STATIC", "输出设置", 0, 0)
 	setFont(app.outputTitle, app.fontBold)
@@ -1639,7 +1634,6 @@ func createUI() {
 	setFont(app.qpdfLabel, app.fontSmall)
 	app.mergeBtn = createControl(0, "BUTTON", "合并 PDF", BS_OWNERDRAW|BS_DEFPUSHBUTTON|WS_TABSTOP, ID_MERGE)
 	setFont(app.mergeBtn, app.fontBold)
-
 	buildMenu()
 	pDragAcceptFiles.Call(app.hwnd, 1)
 	pSetTimer.Call(app.hwnd, TIMER_QUEUE, 300, 0)
@@ -1899,7 +1893,6 @@ func main() {
 	if mh != 0 {
 		defer pCloseHandle.Call(mh)
 	}
-
 	app.bgBrush, _, _ = pCreateSolidBrush.Call(rgb(247, 248, 250))
 	app.cardBrush, _, _ = pCreateSolidBrush.Call(rgb(255, 255, 255))
 	hinst, _, _ := pGetModuleHandleW.Call(0)
@@ -1967,5 +1960,4 @@ func main() {
 	}
 }
 
-// keep io imported on old toolchains when csv paths are optimized
 var _ io.Reader
