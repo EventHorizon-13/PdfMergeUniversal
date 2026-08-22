@@ -1,0 +1,142 @@
+name: One-time CSV import fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Patch CSV import encoding support
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('main.go')
+          s = p.read_text(encoding='utf-8')
+
+          if 'func decodeCSVBytes(' in s and 'PDF 合并工具 v3.1.4' in s:
+              print('CSV import fix is already applied.')
+              raise SystemExit(0)
+
+          def replace_once(old, new, label):
+              global s
+              if old not in s:
+                  raise SystemExit(f'Patch failed: expected {label} snippet not found')
+              s = s.replace(old, new, 1)
+
+          replace_once(
+              '\t"unicode/utf16"\n\t"unsafe"',
+              '\t"unicode/utf16"\n\t"unicode/utf8"\n\t"unsafe"',
+              'import block',
+          )
+
+          replace_once(
+              'appTitle = "PDF 合并工具 v3.1.3"',
+              'appTitle = "PDF 合并工具 v3.1.4"',
+              'version',
+          )
+
+          replace_once(
+              '\tpCloseHandle      = kernel32.NewProc("CloseHandle")',
+              '\tpCloseHandle          = kernel32.NewProc("CloseHandle")\n\tpMultiByteToWideChar = kernel32.NewProc("MultiByteToWideChar")',
+              'kernel32 proc block',
+          )
+
+          helper = r'''
+func decodeCSVBytes(b []byte) ([]byte, error) {
+	// Files exported by this app are UTF-8 with BOM. Excel/WPS may save an
+	// edited CSV back as Windows ANSI/GBK, so accept both transparently.
+	b = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF})
+	if len(b) == 0 || utf8.Valid(b) {
+		return b, nil
+	}
+
+	const cpGBK = 936
+	n, _, _ := pMultiByteToWideChar.Call(
+		cpGBK,
+		0,
+		uintptr(unsafe.Pointer(&b[0])),
+		uintptr(len(b)),
+		0,
+		0,
+	)
+	if n == 0 {
+		return nil, fmt.Errorf("CSV 既不是有效 UTF-8，也无法按 GBK/ANSI 解码")
+	}
+
+	wide := make([]uint16, int(n))
+	n2, _, _ := pMultiByteToWideChar.Call(
+		cpGBK,
+		0,
+		uintptr(unsafe.Pointer(&b[0])),
+		uintptr(len(b)),
+		uintptr(unsafe.Pointer(&wide[0])),
+		n,
+	)
+	if n2 == 0 {
+		return nil, fmt.Errorf("GBK/ANSI CSV 解码失败")
+	}
+
+	return []byte(string(utf16.Decode(wide[:int(n2)]))), nil
+}
+
+'''
+          replace_once(
+              'func importCSV() {',
+              helper + 'func importCSV() {',
+              'importCSV function',
+          )
+
+          replace_once(
+              '\tb = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF})\n\tr := csv.NewReader(bytes.NewReader(b))',
+              '\tb, e = decodeCSVBytes(b)\n\tif e != nil {\n\t\tmsgbox("CSV 编码不支持", e.Error(), MB_OK|MB_ICONWARNING)\n\t\treturn\n\t}\n\tr := csv.NewReader(bytes.NewReader(b))',
+              'CSV decode block',
+          )
+
+          replace_once(
+              'switch strings.TrimSpace(h) {',
+              'switch strings.TrimSpace(strings.TrimPrefix(h, "\\uFEFF")) {',
+              'header normalization',
+          )
+
+          p.write_text(s, encoding='utf-8', newline='\n')
+          PY
+
+          gofmt -w main.go
+
+      - name: Cross-compile Windows build
+        env:
+          GOOS: windows
+          GOARCH: '386'
+          CGO_ENABLED: '0'
+        run: go build -buildvcs=false -trimpath -ldflags="-H=windowsgui -s -w" -o /tmp/PdfMergeUniversal.exe .
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          if git diff --quiet -- main.go; then
+            echo "No source changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add main.go
+          git commit -m "Fix CSV import for UTF-8 and GBK files"
+          git push origin HEAD:main
