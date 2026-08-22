@@ -163,6 +163,7 @@ const (
 	ERROR_ALREADY_EXISTS    = 183
 	SPI_GETICONTITLELOGFONT = 0x001F
 
+	// controls
 	ID_LIST       = 1001
 	ID_ADD        = 1002
 	ID_DELETE     = 1003
@@ -337,7 +338,7 @@ var (
 	pShowWindow              = user32.NewProc("ShowWindow")
 	pUpdateWindow            = user32.NewProc("UpdateWindow")
 	pGetMessageW             = user32.NewProc("GetMessageW")
-	pTranslateMessage        = user32.NewProc("TranslateMessageW")
+	pTranslateMessage        = user32.NewProc("TranslateMessage")
 	pDispatchMessageW        = user32.NewProc("DispatchMessageW")
 	pPostQuitMessage         = user32.NewProc("PostQuitMessage")
 	pSendMessageW            = user32.NewProc("SendMessageW")
@@ -375,10 +376,10 @@ var (
 	pSelectObject            = gdi32.NewProc("SelectObject")
 	pRoundRect               = gdi32.NewProc("RoundRect")
 
-	pGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
-	pCreateMutexW        = kernel32.NewProc("CreateMutexW")
-	pGetLastError        = kernel32.NewProc("GetLastError")
-	pCloseHandle         = kernel32.NewProc("CloseHandle")
+	pGetModuleHandleW   = kernel32.NewProc("GetModuleHandleW")
+	pCreateMutexW       = kernel32.NewProc("CreateMutexW")
+	pGetLastError       = kernel32.NewProc("GetLastError")
+	pCloseHandle        = kernel32.NewProc("CloseHandle")
 	pMultiByteToWideChar = kernel32.NewProc("MultiByteToWideChar")
 
 	pCreateFontW         = gdi32.NewProc("CreateFontW")
@@ -440,6 +441,9 @@ var app struct {
 
 func wstr(s string) *uint16 { p, _ := syscall.UTF16PtrFromString(s); return p }
 
+// utf16Multi converts a Win32 multi-string such as an OPENFILENAME filter.
+// syscall.StringToUTF16 rejects embedded NUL characters, which is exactly
+// what common-dialog filters require, so it must not be used for filters.
 func utf16Multi(s string) []uint16 {
 	if !strings.HasSuffix(s, "\x00\x00") {
 		s += "\x00\x00"
@@ -1889,7 +1893,6 @@ func main() {
 	if mh != 0 {
 		defer pCloseHandle.Call(mh)
 	}
-
 	app.bgBrush, _, _ = pCreateSolidBrush.Call(rgb(247, 248, 250))
 	app.cardBrush, _, _ = pCreateSolidBrush.Call(rgb(255, 255, 255))
 	hinst, _, _ := pGetModuleHandleW.Call(0)
