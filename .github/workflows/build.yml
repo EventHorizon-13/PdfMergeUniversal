@@ -24,8 +24,8 @@ jobs:
         with:
           go-version: '1.25.x'
 
-      - name: Patch CSV import encoding support on fix PR
-        if: github.event_name == 'pull_request'
+      - name: Patch CSV import encoding support
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
         shell: bash
         run: |
           python3 - <<'PY'
@@ -119,8 +119,8 @@ func decodeCSVBytes(b []byte) ([]byte, error) {
           PY
           gofmt -w main.go
 
-      - name: Commit patched source back to PR branch
-        if: github.event_name == 'pull_request'
+      - name: Commit patched source
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
         shell: bash
         run: |
           if git diff --quiet -- main.go; then
@@ -131,7 +131,12 @@ func decodeCSVBytes(b []byte) ([]byte, error) {
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add main.go
           git commit -m "Fix CSV import for UTF-8 and GBK files"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            target="${{ github.event.pull_request.head.ref }}"
+          else
+            target="$GITHUB_REF_NAME"
+          fi
+          git push origin HEAD:"$target"
 
       - name: Build Windows executable
         env:
