@@ -63,4 +63,4 @@ rsrc -ico PdfMergeUniversal.ico -o rsrc.syso
 
 ## 许可证
 
-本项目采用 [MIT License](LICENSE)。Release 中包含的 QPDF 是独立项目，采用 Apache License 2.0；其许可证和随包文件位于压缩包内的 `qpdf/` 目录。
+本项目采用 [MIT License](LICENSE)。Release 中包含的 QPDF 是独立项目，采用 Apache License 2.0；其许可证 `LICENSE.txt`、上游声明 `NOTICE.md` 及随包文件位于压缩包内的 `qpdf/` 目录。
