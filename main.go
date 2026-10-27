@@ -1406,13 +1406,19 @@ func startMerge() {
 		buf, err := cmd.CombinedOutput()
 		success := false
 		msg := strings.TrimSpace(string(buf))
-		if st, e := os.Stat(out); e == nil && st.Size() > 0 {
-			success = true
-		}
-		if err != nil && !success {
+		if err != nil {
 			if msg == "" {
 				msg = err.Error()
 			}
+		} else if st, e := os.Stat(out); e != nil {
+			msg = "qpdf 未能创建输出文件：" + e.Error()
+		} else if st.Size() == 0 {
+			msg = "qpdf 生成的输出文件为空。"
+		} else {
+			success = true
+		}
+		if !success {
+			_ = os.Remove(out)
 		}
 		if success && known {
 			if n, ok := pageCount(out); ok && n != total {
