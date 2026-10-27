@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
 
+env:
+  QPDF_VERSION: '12.4.2'
+
 jobs:
   windows-exe:
     runs-on: ubuntu-latest
@@ -21,6 +24,28 @@ jobs:
         with:
           go-version: '1.25.x'
 
+      - name: Download portable QPDF
+        run: |
+          archive="qpdf-${QPDF_VERSION}-mingw32.zip"
+          curl --fail --location --retry 3 \
+            "https://github.com/qpdf/qpdf/releases/download/v${QPDF_VERSION}/${archive}" \
+            -o /tmp/qpdf.zip
+          mkdir -p /tmp/qpdf dist/qpdf
+          unzip -q /tmp/qpdf.zip -d /tmp/qpdf
+          qpdf_exe="$(find /tmp/qpdf -type f -path '*/bin/qpdf.exe' -print -quit)"
+          if [ -z "$qpdf_exe" ]; then
+            echo "::error::qpdf.exe was not found in the official archive"
+            exit 1
+          fi
+          qpdf_root="${qpdf_exe%/bin/qpdf.exe}"
+          cp -a "$qpdf_root"/. dist/qpdf/
+          curl --fail --location --retry 3 \
+            "https://raw.githubusercontent.com/qpdf/qpdf/v${QPDF_VERSION}/LICENSE.txt" \
+            -o dist/qpdf/LICENSE.txt
+          curl --fail --location --retry 3 \
+            "https://raw.githubusercontent.com/qpdf/qpdf/v${QPDF_VERSION}/NOTICE.md" \
+            -o dist/qpdf/NOTICE.md
+
       - name: Build Windows executable
         env:
           GOOS: windows
@@ -31,7 +56,7 @@ jobs:
           go build -buildvcs=false -trimpath -ldflags="-H=windowsgui -s -w" -o dist/PdfMergeUniversal.exe .
           cp PdfMergeUniversal.ico README.md LICENSE dist/
           cd dist
-          zip -9 PdfMergeUniversal_Windows.zip PdfMergeUniversal.exe PdfMergeUniversal.ico README.md LICENSE
+          zip -9 -r PdfMergeUniversal_Windows.zip PdfMergeUniversal.exe PdfMergeUniversal.ico README.md LICENSE qpdf
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
