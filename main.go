@@ -1417,14 +1417,14 @@ func startMerge() {
 		} else {
 			success = true
 		}
-		if !success {
-			_ = os.Remove(out)
-		}
 		if success && known {
 			if n, ok := pageCount(out); ok && n != total {
 				success = false
 				msg = fmt.Sprintf("输出页数校验失败：预计 %d 页，实际 %d 页。", total, n)
 			}
+		}
+		if !success {
+			_ = os.Remove(out)
 		}
 		app.mu.Lock()
 		app.mergeResult = &MergeResult{Success: success, Output: out, Message: msg}
