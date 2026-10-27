@@ -21,11 +21,9 @@
 
 在仓库右侧的 **Releases** 下载最新版本，解压后运行 `PdfMergeUniversal.exe`。
 
-本工具使用 [qpdf](https://github.com/qpdf/qpdf) 完成 PDF 合并。qpdf 未包含在本仓库中，可采用以下任一方式配置：
+本工具使用 [qpdf](https://github.com/qpdf/qpdf) 完成 PDF 合并。Release 压缩包会一并附带官方 QPDF 12.4.2 Windows 32 位便携发行版，解压后即可使用，无需另行安装 QPDF。QPDF 作为独立进程运行，并未静态编译进本工具的 Go EXE。
 
-1. 将 `qpdf.exe` 放在程序同目录；
-2. 将 qpdf 的 `bin` 目录加入系统 `PATH`；
-3. 点击右上角 `···` → `配置 qpdf...`，手动选择 `qpdf.exe`。
+如需改用自己安装的版本，可点击右上角 `···` → `配置 qpdf...`，手动选择 `qpdf.exe`。从源码自行构建时，也需要单独准备 qpdf：可以放在程序同目录或 `qpdf/bin/qpdf.exe`，加入系统 `PATH`，或在程序中手动配置。
 
 添加文件并调整顺序后，点击“合并 PDF”或按 `Enter` 即可。
 
@@ -61,8 +59,8 @@ rsrc -ico PdfMergeUniversal.ico -o rsrc.syso
 ## 系统要求
 
 - Windows 7 或更高版本
-- qpdf
+- Release 版本已附带 QPDF；从源码构建时需要单独准备 QPDF
 
 ## 许可证
 
-本项目采用 [MIT License](LICENSE)。qpdf 是独立项目，遵循其自身许可证。
+本项目采用 [MIT License](LICENSE)。Release 中包含的 QPDF 是独立项目，采用 Apache License 2.0；其许可证和随包文件位于压缩包内的 `qpdf/` 目录。
