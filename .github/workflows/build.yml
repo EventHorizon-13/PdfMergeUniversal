@@ -42,6 +42,9 @@ jobs:
           curl --fail --location --retry 3 \
             "https://raw.githubusercontent.com/qpdf/qpdf/v${QPDF_VERSION}/LICENSE.txt" \
             -o dist/qpdf/LICENSE.txt
+          curl --fail --location --retry 3 \
+            "https://raw.githubusercontent.com/qpdf/qpdf/v${QPDF_VERSION}/NOTICE.md" \
+            -o dist/qpdf/NOTICE.md
 
       - name: Build Windows executable
         env:
